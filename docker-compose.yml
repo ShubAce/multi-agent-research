@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+    # ── Infrastructure ──────────────────────────────────────────────────────────
+    redis:
+        image: redis:7-alpine
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ["CMD", "redis-cli", "ping"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    chromadb:
+        image: chromadb/chroma:0.5.23
+        ports:
+            - "8001:8000"
+        volumes:
+            - chroma_data:/chroma/chroma
+        environment:
+            - IS_PERSISTENT=TRUE
+            - ANONYMIZED_TELEMETRY=FALSE
+        healthcheck:
+            test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    # ── Backend ─────────────────────────────────────────────────────────────────
+    backend:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        ports:
+            - "8000:8000"
+        env_file: ./backend/.env
+        environment:
+            - REDIS_URL=redis://redis:6379
+            - CHROMA_HOST=chromadb
+            - CHROMA_PORT=8001
+        volumes:
+            - ./backend:/app # hot-reload in dev
+            - ./data:/app/data # shared corpus folder
+        depends_on:
+            redis:
+                condition: service_healthy
+            chromadb:
+                condition: service_healthy
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    worker:
+        build:
+            context: ./backend
+            dockerfile: Dockerfile
+        command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+        env_file: ./backend/.env
+        environment:
+            - REDIS_URL=redis://redis:6379
+            - CHROMA_HOST=chromadb
+            - CHROMA_PORT=8001
+        volumes:
+            - ./backend:/app
+            - ./data:/app/data
+        depends_on:
+            redis:
+                condition: service_healthy
+            chromadb:
+                condition: service_healthy
+
+    # ── Frontend ─────────────────────────────────────────────────────────────────
+    frontend:
+        build:
+            context: ./frontend
+            dockerfile: Dockerfile
+            args:
+                NEXT_PUBLIC_API_URL: http://backend:8000
+                NEXT_PUBLIC_API_KEY: your-local-dev-key
+        ports:
+            - "3000:3000"
+        env_file: ./backend/.env
+        environment:
+            - NEXT_PUBLIC_API_URL=http://backend:8000
+        depends_on:
+            backend:
+                condition: service_healthy
+
+volumes:
+    redis_data:
+    chroma_data:

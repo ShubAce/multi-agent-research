@@ -1,0 +1,22 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      poetry:
+        specifier: ^0.6.29
+        version: 0.6.29
+
+packages:
+
+  poetry@0.6.29:
+    resolution: {integrity: sha512-NJUEdQnYyrmhu+JyO0KkZU4IB+B3P9lM3Xrn2RyzGWmNDaYD3qNKxfcENnh8KXcTV9xWk2SuE5n2270xnn5vhw==}
+
+snapshots:
+
+  poetry@0.6.29: {}

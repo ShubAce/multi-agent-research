@@ -1,0 +1,150 @@
+# ============================================================================
+# BACKEND (Entire directory excluded)
+# ============================================================================
+
+
+# ============================================================================
+# PYTHON
+# ============================================================================
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+.hypothesis/
+
+# Poetry
+poetry.lock
+
+# Pipenv
+Pipfile.lock
+
+# ============================================================================
+# ENVIRONMENT & CONFIGURATION
+# ============================================================================
+.env
+.env.local
+.env.*.local
+*.env.local
+
+# ============================================================================
+# DATABASE & DATA
+# ============================================================================
+chroma_db/
+*.sqlite3
+*.db
+
+# Generated/downloaded data
+data/
+downloads/
+*.pkl
+*.pickle
+*.bin
+*.pt
+*.ckpt
+*.pth
+
+# ML artifacts
+mlruns/
+*.joblib
+
+# ============================================================================
+# FRONTEND (Node/Next.js)
+# ============================================================================
+node_modules/
+frontend/node_modules/
+.next/
+.pnpm-store/
+pnpm-store/
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/.vercel/
+
+# Build outputs
+.nuxt/
+dist/
+build/
+
+# ============================================================================
+# IDE & EDITOR
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.atom/
+.project
+.pydevproject
+.settings/
+*.code-workspace
+
+# ============================================================================
+# OS
+# ============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================================
+# LOGS & TEMPORARY FILES
+# ============================================================================
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Docker
+docker-compose.override.yml
+
+# ============================================================================
+# TESTING & EVALUATION
+# ============================================================================
+.pytest_cache/
+.coverage
+htmlcov/
+test_results/
+backend/.multiAgent
+# ============================================================================
+# DEVELOPMENT ARTIFACTS & VIRTUAL ENVIRONMENTS
+# ============================================================================
+# Virtual environment
+.multiAgent/
+
+# Notebooks
+*.ipynb_checkpoints
+.ipynb_checkpoints/
+
+# ============================================================================
+# PROJECT-SPECIFIC
+# ============================================================================
+# Celery
+celerybeat-schedule
+
+# Development helpers
+
+debug_logs/
