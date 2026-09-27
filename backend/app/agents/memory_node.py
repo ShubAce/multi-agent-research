@@ -22,21 +22,27 @@ With memory:    "Who invented it?" → correct retrieval → good answer
 
 from __future__ import annotations
 
-import asyncio
+import re
+from functools import lru_cache
 
 from app.agents.state import AgentState
 from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
+_ASSISTANT_TURN_CHARS = 1200
+
+
+@lru_cache(maxsize=1)
+def _memory():
+    from app.memory.short_term import SyncConversationMemory
+
+    return SyncConversationMemory()
+
 
 def memory_injection_node(state: AgentState) -> dict:
     """
     LangGraph node: Memory Injection.
-
-    Fetches conversation history from Redis and adds it to the state.
-    Runs synchronously (Celery context) by running the async call in an
-    event loop.
 
     Input state keys used:  session_id
     Output state keys set:  conversation_history
@@ -46,35 +52,29 @@ def memory_injection_node(state: AgentState) -> dict:
         return {"conversation_history": ""}
 
     try:
-        history_str = asyncio.run(_fetch_history(session_id))
-        log.info(
-            "memory_injected",
-            session_id=session_id,
-            has_history=bool(history_str),
-        )
+        history_str = _fetch_history(session_id)
+        log.info("memory_injected", session_id=session_id, has_history=bool(history_str))
         return {"conversation_history": history_str}
     except Exception as exc:
         log.warning("memory_injection_failed", error=str(exc))
         return {"conversation_history": ""}
 
 
-async def _fetch_history(session_id: str) -> str:
-    from app.memory.short_term import ConversationMemory
-    memory = ConversationMemory()
-    return await memory.format_for_prompt(session_id, last_n=6)
+def _fetch_history(session_id: str) -> str:
+    return _memory().format_for_prompt(session_id, last_n=6)
 
 
-async def save_turn_to_memory(
-    session_id: str,
-    user_query: str,
-    assistant_answer: str,
-) -> None:
+def save_turn_to_memory(session_id: str, user_query: str, assistant_answer: str) -> None:
     """
     Called after a successful pipeline run to persist the turn.
-    Saves both user and assistant messages to Redis.
+    Citation markers are stripped — they mean nothing outside this answer.
     """
-    from app.memory.short_term import ConversationMemory
-    memory = ConversationMemory()
-    await memory.add_turn(session_id, role="user", content=user_query)
-    await memory.add_turn(session_id, role="assistant", content=assistant_answer[:500])
+    answer = re.sub(r"\s*\[\d+\]", "", assistant_answer)[:_ASSISTANT_TURN_CHARS]
+    memory = _memory()
+    memory.add_turn(session_id, role="user", content=user_query)
+    memory.add_turn(session_id, role="assistant", content=answer)
     log.info("turn_saved_to_memory", session_id=session_id)
+
+
+def clear_memory(session_id: str) -> None:
+    _memory().clear_session(session_id)

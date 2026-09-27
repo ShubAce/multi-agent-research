@@ -62,6 +62,7 @@ class PaperSummary:
     contributions: list[str]
     related_work: list[str]
     nodes_ingested: int
+    already_indexed: bool = False
 
 
 def _extract_arxiv_id(input_str: str) -> str:
@@ -110,7 +111,7 @@ def _generate_summary(title: str, abstract: str) -> dict:
     response = llm.invoke(messages)
 
     import json
-    text = response.content.strip()
+    text = str(response.content).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -145,38 +146,27 @@ def summarise_paper(arxiv_input: str) -> PaperSummary:
     # 3. Generate structured summary
     summary_data = _generate_summary(title, abstract)
 
-    # 4. Ingest into ChromaDB for future retrieval
+    # 4. Ingest into ChromaDB for future retrieval (skipped if already indexed)
     nodes_ingested = 0
+    already_indexed = False
     try:
-        from app.ingestion.arxiv_loader import ArxivPaper, papers_to_documents
-        from app.ingestion.chunkers import chunk_documents
-        from app.ingestion.pipeline import IngestionPipeline
-        from llama_index.core import VectorStoreIndex, StorageContext
+        from app.ingestion.arxiv_loader import ArxivPaper
+        from app.ingestion.pipeline import get_pipeline
 
-        paper_obj = ArxivPaper(
-            arxiv_id=arxiv_id,
-            title=title,
-            authors=authors,
-            abstract=abstract,
-            published=published,
-            url=url,
-            categories=paper.categories,
-        )
-        documents = papers_to_documents([paper_obj])
-        nodes = chunk_documents(documents, strategy="sentence_window")
-
-        pipeline = IngestionPipeline()
-        storage_context = StorageContext.from_defaults(
-            vector_store=pipeline.vector_store
-        )
-        VectorStoreIndex(nodes, storage_context=storage_context, show_progress=False)
-
-        # Invalidate BM25 cache since we added new documents
-        from app.retrieval.hybrid import invalidate_bm25_cache
-        invalidate_bm25_cache()
-
-        nodes_ingested = len(nodes)
-        log.info("paper_ingested", arxiv_id=arxiv_id, nodes=nodes_ingested)
+        result = get_pipeline().ingest_papers([
+            ArxivPaper(
+                arxiv_id=arxiv_id,
+                title=title,
+                authors=authors,
+                abstract=abstract,
+                published=published,
+                url=url,
+                categories=paper.categories,
+            )
+        ])
+        nodes_ingested = result["chunks_indexed"]
+        already_indexed = result["papers_skipped"] > 0
+        log.info("paper_ingested", arxiv_id=arxiv_id, nodes=nodes_ingested, already_indexed=already_indexed)
 
     except Exception as exc:
         log.warning("paper_ingest_failed", error=str(exc))
@@ -196,4 +186,5 @@ def summarise_paper(arxiv_input: str) -> PaperSummary:
         contributions=summary_data.get("contributions", []),
         related_work=summary_data.get("related_work", []),
         nodes_ingested=nodes_ingested,
+        already_indexed=already_indexed,
     )

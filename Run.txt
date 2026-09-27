@@ -1,3 +1,150 @@
-docker compose up redis chromadb
-python run_dev.py
-pnpm dev
+RESEARCH ASSISTANT - HOW TO RUN
+===============================
+
+Commands are for Windows PowerShell, run from the project folder
+("Multi Agent Research Assistant") unless a step says otherwise.
+
+
+WHAT YOU NEED
+-------------
+- Docker Desktop          runs Redis and ChromaDB
+- Python 3.11+            the project virtualenv is backend\.multiAgent
+- Node.js 20+ and pnpm    for the web UI
+- Groq API key            required    https://console.groq.com
+- Tavily API key          optional    https://app.tavily.com  (turns on web search)
+
+
+FIRST-TIME SETUP (once)
+-----------------------
+1. API keys
+   Copy .env.example to backend\.env, then set:
+       GROQ_API_KEY=...
+       TAVILY_API_KEY=...        (leave empty to use papers only)
+
+   frontend\.env needs:
+       NEXT_PUBLIC_API_URL=http://localhost:8000
+
+2. Backend packages (skip if backend\.multiAgent already works)
+       cd backend
+       python -m venv .multiAgent
+       .multiAgent\Scripts\python -m pip install -r requirements.txt
+       cd ..
+
+3. Frontend packages
+       cd frontend
+       pnpm install
+       cd ..
+
+
+EVERY TIME - 3 TERMINALS
+------------------------
+Start Docker Desktop first.
+
+Terminal 1 - Redis + ChromaDB
+       docker compose up redis chromadb
+
+Terminal 2 - API (port 8000) + agent worker
+       backend\.multiAgent\Scripts\python run_dev.py
+
+Terminal 3 - Web UI (port 3000)
+       cd frontend
+       pnpm dev
+
+Open http://localhost:3000
+The bottom-left of the sidebar should say "All systems operational".
+If it doesn't, click it to see which service is down.
+
+The first question after a fresh start can take ~1 minute while the worker
+loads (or downloads) the embedding and reranking models.
+
+To stop: press Ctrl+C in each terminal, then run  docker compose down
+
+
+ADD PAPERS TO THE KNOWLEDGE BASE
+--------------------------------
+In the app: open the right panel -> Library -> "Add papers by topic",
+or paste an arXiv link under "Summarise & add one paper".
+
+From the command line:
+       cd backend
+       .multiAgent\Scripts\python -m app.ingestion.pipeline
+           (seeds a default ML corpus: attention, LLMs, RAG, diffusion, RLHF)
+       .multiAgent\Scripts\python -m app.ingestion.pipeline --query "flash attention" --max-papers 20
+
+Papers already in the knowledge base are skipped, so re-running is safe.
+
+
+RUN EVERYTHING IN DOCKER (alternative)
+--------------------------------------
+       docker compose up --build
+Then open http://localhost:3000
+
+
+USEFUL ADDRESSES
+----------------
+http://localhost:3000                   the app
+http://localhost:8000/docs              interactive API docs
+http://localhost:8000/api/v1/ready      status of LLM, Redis, ChromaDB and worker
+
+
+TESTS
+-----
+       cd backend
+       .multiAgent\Scripts\python -m pytest tests -q
+
+
+TROUBLESHOOTING
+---------------
+"Can't reach the backend"          Terminal 2 isn't running, or it crashed - check its output.
+Stuck on "Waiting for a worker"    The Celery worker isn't running - restart Terminal 2.
+"Language model" shows an error    Check GROQ_API_KEY. If it says "model not available",
+                                   Groq retired the model: set GROQ_MODEL / GROQ_MODEL_FAST
+                                   in backend\.env to a model your key can use.
+ChromaDB or Redis shows an error   Docker Desktop or Terminal 1 isn't running.
+Web search toggle is greyed out    TAVILY_API_KEY is not set in backend\.env.
+Answers never cite papers          The knowledge base doesn't cover the topic yet -
+                                   add papers from the Library (or keep web search on).
+
+
+FEATURES
+========
+
+Research pipeline (5 agents, shown live while they run)
+- Memory: remembers the conversation, so follow-ups like "who proposed it?" work
+- Planner: splits your question into 2-4 sub-tasks and sends each to papers or the web
+- Research: searches ArXiv papers (query rewriting + keyword/semantic hybrid search +
+  reranking) and the web at the same time; uses the web if the papers have nothing relevant
+- Synthesiser: writes a structured answer where every claim cites a numbered source
+- Fact-check: checks every sentence and table row against the sources and removes
+  unsupported ones; if nothing can be verified the answer is marked "unverified"
+- Critic: scores the answer 0-10; if it is weak, the agents research again with better queries
+
+Answers
+- Citation chips [1] [2]: hover to preview the source, click to jump to it
+- Source cards (papers and web pages) that open the original
+- Quality badges: % grounded, quality score, "Refined", "Web fallback", time taken
+- Fact-check report listing what was removed or inferred
+- Suggested follow-up questions
+- Copy, download as Markdown, ask again
+
+Workspace
+- Research history in the sidebar: searchable, grouped by date, saved in your browser
+- Web search on/off switch (papers only vs papers + web)
+- Stop a running question at any time
+- Export a whole conversation as Markdown
+- Reloading the page mid-question picks the progress back up
+
+Run inspector (right panel)
+- Step-by-step timeline for any answer: the plan, papers and web results found,
+  grounding, critic feedback, and how long each step took
+
+Library (right panel)
+- See every paper in the knowledge base, filter by title or author, remove papers
+- Add papers from arXiv by topic
+- Summarise one paper from its arXiv link (problem, method, results, limitations,
+  contributions) - it is added to the knowledge base automatically
+
+Interface
+- Live status of API, language model, worker, Redis and ChromaDB, with hints when down
+- Light, dark and system themes
+- Works on phones (history and panel open as drawers)

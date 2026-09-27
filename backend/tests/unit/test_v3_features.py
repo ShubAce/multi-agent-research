@@ -140,10 +140,10 @@ class TestMemoryNode:
         result = memory_injection_node(state)
         assert result["conversation_history"] == ""
 
-    @patch("app.agents.memory_node.asyncio.run")
-    def test_memory_failure_returns_empty(self, mock_run):
+    @patch("app.agents.memory_node._fetch_history")
+    def test_memory_failure_returns_empty(self, mock_fetch):
         from app.agents.memory_node import memory_injection_node
-        mock_run.side_effect = Exception("Redis connection failed")
+        mock_fetch.side_effect = Exception("Redis connection failed")
         state = {"session_id": "test-session",
                  "query": "test", "messages": [],
                  "conversation_history": "", "sub_tasks": [],

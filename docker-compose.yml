@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
     # ── Infrastructure ──────────────────────────────────────────────────────────
     redis:
@@ -40,7 +38,7 @@ services:
         environment:
             - REDIS_URL=redis://redis:6379
             - CHROMA_HOST=chromadb
-            - CHROMA_PORT=8001
+            - CHROMA_PORT=8000 # container port (8001 is only the host mapping)
         volumes:
             - ./backend:/app # hot-reload in dev
             - ./data:/app/data # shared corpus folder
@@ -64,7 +62,7 @@ services:
         environment:
             - REDIS_URL=redis://redis:6379
             - CHROMA_HOST=chromadb
-            - CHROMA_PORT=8001
+            - CHROMA_PORT=8000 # container port (8001 is only the host mapping)
         volumes:
             - ./backend:/app
             - ./data:/app/data
@@ -80,13 +78,11 @@ services:
             context: ./frontend
             dockerfile: Dockerfile
             args:
-                NEXT_PUBLIC_API_URL: http://backend:8000
+                # Baked into browser code, so it must be reachable from the browser
+                NEXT_PUBLIC_API_URL: http://localhost:8000
                 NEXT_PUBLIC_API_KEY: your-local-dev-key
         ports:
             - "3000:3000"
-        env_file: ./backend/.env
-        environment:
-            - NEXT_PUBLIC_API_URL=http://backend:8000
         depends_on:
             backend:
                 condition: service_healthy

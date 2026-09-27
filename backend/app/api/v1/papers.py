@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
-from app.core.security import verify_api_key
 from app.core.logging import get_logger
+from app.core.security import verify_api_key
 
 log = get_logger(__name__)
 router = APIRouter(tags=["papers"])
@@ -45,6 +46,7 @@ class SummariseResponse(BaseModel):
     contributions: list[str]
     related_work: list[str]
     nodes_ingested: int
+    already_indexed: bool = False
     message: str
 
 
@@ -70,7 +72,8 @@ async def summarise_paper(
 
     try:
         from app.services.paper_summariser import summarise_paper as _summarise
-        summary = _summarise(request.arxiv_input)
+        # Blocking work (ArXiv + LLM + embeddings) — keep it off the event loop
+        summary = await run_in_threadpool(_summarise, request.arxiv_input)
 
         return SummariseResponse(
             arxiv_id=summary.arxiv_id,
@@ -86,10 +89,13 @@ async def summarise_paper(
             contributions=summary.contributions,
             related_work=summary.related_work,
             nodes_ingested=summary.nodes_ingested,
+            already_indexed=summary.already_indexed,
             message=(
-                f"Paper ingested successfully — {summary.nodes_ingested} chunks added to knowledge base."
+                f"Added to the knowledge base ({summary.nodes_ingested} chunks)."
                 if summary.nodes_ingested > 0
-                else "Summary generated. Ingestion into knowledge base failed — paper may still be searchable."
+                else "Already in the knowledge base."
+                if summary.already_indexed
+                else "Summary generated, but adding the paper to the knowledge base failed."
             ),
         )
 
@@ -97,10 +103,10 @@ async def summarise_paper(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
-        )
+        ) from exc
     except Exception as exc:
         log.error("summarise_error", error=str(exc))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to summarise paper: {exc}",
-        )
+        ) from exc

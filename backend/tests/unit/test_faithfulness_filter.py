@@ -75,12 +75,24 @@ class TestApplyFaithfulnessFilter:
 
     @patch("app.retrieval.faithfulness_filter._batch_check_sentences")
     def test_unsupported_sentences_removed(self, mock_check):
-        mock_check.return_value = ["unsupported", "unsupported"]
+        mock_check.return_value = ["supported", "unsupported"]
         result = apply_faithfulness_filter(
-            answer="Flash Attention was invented in 1995. It uses quantum computing.",
+            answer="Flash Attention is a modern GPU attention algorithm. It was invented in 1995 by a quantum computer.",
             source_contexts=["Flash Attention is a modern GPU algorithm from 2022."],
         )
-        assert result.removed_sentences > 0
+        assert result.removed_sentences == 1
+        assert "1995" not in result.filtered_answer
+
+    @patch("app.retrieval.faithfulness_filter._batch_check_sentences")
+    def test_nothing_verified_is_flagged_not_removed(self, mock_check):
+        """If no claim is supported, keep the answer but mark it unverified."""
+        mock_check.return_value = ["unsupported", "unsupported"]
+        answer = "Flash Attention was invented in 1995 by aliens. It runs on quantum computers only."
+        result = apply_faithfulness_filter(answer=answer, source_contexts=["Unrelated source."])
+        assert result.filtered_answer == answer
+        assert result.unverified is True
+        assert result.removed_sentences == 0
+        assert result.report()["unverified"] is True
 
     @patch("app.retrieval.faithfulness_filter._batch_check_sentences")
     def test_partial_sentences_flagged(self, mock_check):
@@ -90,7 +102,9 @@ class TestApplyFaithfulnessFilter:
             source_contexts=["Flash Attention reduces memory usage."],
         )
         assert result.flagged_sentences > 0
-        assert "*(based on inference from sources)*" in result.filtered_answer
+        # Inferred claims stay in the answer and are listed in the fact-check report
+        assert "improves training speed" in result.filtered_answer
+        assert result.report()["inferred_sentences"] == result.flagged_content
 
     @patch("app.retrieval.faithfulness_filter._batch_check_sentences")
     def test_fallback_when_all_removed(self, mock_check):

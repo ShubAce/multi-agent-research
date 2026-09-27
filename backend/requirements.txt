@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+sse-starlette
 langchain
 langchain-community
 langchain-groq
@@ -21,6 +22,7 @@ sqlalchemy[asyncio]
 aiosqlite
 alembic
 arxiv
+rank-bm25
 ragas
 datasets
 httpx

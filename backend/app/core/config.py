@@ -20,11 +20,17 @@ class Settings(BaseSettings):
     environment: str = Field(default="development")
     log_level: str = Field(default="INFO")
     api_key: str = Field(default="dev-secret-key-change-in-prod")
+    # Browser origins allowed to call the API (JSON list in .env)
+    cors_origins: list[str] = Field(
+        default=["http://localhost:3000", "http://127.0.0.1:3000"]
+    )
 
     # ── LLM ──────────────────────────────────────────────────────────────────
     groq_api_key: str = Field(default="")
-    groq_model: str = Field(default="llama-3.3-70b-versatile")
-    groq_model_fast: str = Field(default="llama-3.1-8b-instant")   # cheaper, for simple tasks
+    # Groq retired llama-3.3-70b-versatile / llama-3.1-8b-instant — they now 404
+    groq_model: str = Field(default="openai/gpt-oss-120b")
+    groq_model_fast: str = Field(default="openai/gpt-oss-20b")     # cheaper, for simple tasks
+    groq_reasoning_effort: str = Field(default="low")              # gpt-oss: low | medium | high
 
     # ── Tools ────────────────────────────────────────────────────────────────
     tavily_api_key: str = Field(default="")
@@ -44,7 +50,9 @@ class Settings(BaseSettings):
 
     # ── RAG ──────────────────────────────────────────────────────────────────
     retrieval_top_k: int = Field(default=6)        # reduced: less reranker work, still good recall
-    rerank_top_n: int = Field(default=3)           # after reranking
+    rerank_top_n: int = Field(default=5)           # passages kept per sub-task after reranking
+    rerank_model: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    rerank_min_score: float = Field(default=0.05)  # drop passages the reranker finds irrelevant (0–1)
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=50)
 
@@ -66,7 +74,12 @@ class Settings(BaseSettings):
 
     # ── Agents ───────────────────────────────────────────────────────────────
     agent_max_iterations: int = Field(default=5)   # prevents infinite loops
-    agent_timeout_seconds: int = Field(default=120)
+    agent_timeout_seconds: int = Field(default=240)
+    max_sources: int = Field(default=10)           # numbered sources shown to the synthesiser
+    follow_ups_enabled: bool = Field(default=True) # suggest follow-up questions after each answer
+
+    # ── Job events ───────────────────────────────────────────────────────────
+    job_events_ttl_seconds: int = Field(default=3600)  # how long a job's event log is replayable
 
     # ── LangSmith ────────────────────────────────────────────────────────────
     langchain_tracing_v2: bool = Field(default=False)

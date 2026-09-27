@@ -2,24 +2,123 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme tokens (RGB channels, consumed by tailwind.config.ts) ─────────── */
 @layer base {
-  html {
+  :root {
+    --bg: 247 247 249;
+    --surface: 255 255 255;
+    --surface-2: 241 242 245;
+    --border: 226 228 233;
+    --fg: 17 20 28;
+    --fg-muted: 82 89 104;
+    --fg-subtle: 138 145 160;
+    --accent: 79 70 229;
+    --accent-fg: 255 255 255;
+    --accent-text: 67 56 202;
+    --accent-soft: 238 240 255;
+    --success: 4 138 96;
+    --success-soft: 232 248 241;
+    --warning: 190 110 5;
+    --warning-soft: 254 246 231;
+    --danger: 205 38 38;
+    --danger-soft: 253 238 238;
+    color-scheme: light;
+  }
+
+  .dark {
+    --bg: 12 13 17;
+    --surface: 21 23 29;
+    --surface-2: 30 33 41;
+    --border: 44 48 58;
+    --fg: 235 237 242;
+    --fg-muted: 162 168 182;
+    --fg-subtle: 108 115 130;
+    --accent: 99 102 241;
+    --accent-fg: 255 255 255;
+    --accent-text: 165 173 252;
+    --accent-soft: 32 32 72;
+    --success: 52 199 142;
+    --success-soft: 12 44 34;
+    --warning: 240 180 60;
+    --warning-soft: 52 36 8;
+    --danger: 244 112 112;
+    --danger-soft: 56 18 20;
+    color-scheme: dark;
+  }
+
+  html,
+  body {
+    @apply bg-bg text-fg;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Custom scrollbar for chat area */
-  ::-webkit-scrollbar {
-    width: 6px;
+  ::selection {
+    background: rgb(var(--accent) / 0.2);
   }
-  ::-webkit-scrollbar-track {
-    background: transparent;
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--border)) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    background: #e2e8f0;
-    border-radius: 3px;
+    background: rgb(var(--border));
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
-  ::-webkit-scrollbar-thumb:hover {
-    background: #cbd5e1;
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent) / 0.6);
+    outline-offset: 2px;
+  }
+}
+
+/* ── Research answer typography ─────────────────────────────────────────── */
+@layer components {
+  .answer {
+    @apply text-[15px] leading-7 text-fg;
+  }
+  .answer > * + * {
+    @apply mt-4;
+  }
+  .answer h1,
+  .answer h2,
+  .answer h3,
+  .answer h4 {
+    @apply font-semibold tracking-tight text-fg;
+  }
+  .answer h1 { @apply mt-7 text-xl; }
+  .answer h2 { @apply mt-7 text-lg; }
+  .answer h3 { @apply mt-6 text-base; }
+  .answer h4 { @apply mt-5 text-sm uppercase tracking-wide text-fg-muted; }
+  .answer strong { @apply font-semibold text-fg; }
+  .answer a:not(.cite) { @apply font-medium text-accent-text underline decoration-accent-text/30 underline-offset-2 hover:decoration-accent-text; }
+  .answer ul { @apply list-disc space-y-1.5 pl-5 marker:text-fg-subtle; }
+  .answer ol { @apply list-decimal space-y-1.5 pl-5 marker:text-fg-subtle; }
+  .answer li > ul,
+  .answer li > ol { @apply mt-1.5; }
+  .answer blockquote { @apply border-l-2 border-border pl-4 text-fg-muted; }
+  .answer hr { @apply my-6 border-border; }
+  .answer :not(pre) > code { @apply rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em]; }
+  .answer pre { @apply overflow-x-auto rounded-lg border border-border bg-surface-2 p-4 font-mono text-[13px] leading-6; }
+  .answer table { @apply w-full border-collapse text-left text-sm; }
+  .answer thead th { @apply border-b border-border bg-surface-2 px-3 py-2 font-semibold text-fg; }
+  .answer tbody td { @apply border-b border-border px-3 py-2 align-top text-fg-muted; }
+  .answer tbody tr:last-child td { @apply border-b-0; }
+
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--surface-2)) 0px,
+      rgb(var(--border) / 0.7) 80px,
+      rgb(var(--surface-2)) 160px
+    );
+    background-size: 800px 100%;
+    @apply animate-shimmer rounded;
   }
 }

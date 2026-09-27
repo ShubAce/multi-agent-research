@@ -42,11 +42,38 @@ class SessionSummary(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
-    services: dict[str, str]     # e.g. {"redis": "ok", "chromadb": "ok"}
-    version: str = "0.1.0"
+    services: dict[str, str]     # e.g. {"redis": "ok", "chromadb": "ok", "worker": "ok"}
+    version: str = "0.2.0"
+    features: dict[str, bool] = {}   # e.g. {"llm": True, "web_search": False}
+    knowledge_chunks: int | None = None
 
 
 class IngestResponse(BaseModel):
     status: str
-    papers_indexed: int
+    papers_indexed: int          # new papers added (kept for backwards compatibility)
+    papers_found: int = 0
+    papers_skipped: int = 0      # already in the knowledge base
+    chunks_indexed: int = 0
+    total_chunks: int = 0
     collection: str
+
+
+class KnowledgePaper(BaseModel):
+    arxiv_id: str
+    title: str
+    authors: list[str] = []
+    published: str = ""
+    url: str = ""
+    categories: str = ""
+    chunks: int = 0
+
+
+class KnowledgeStats(BaseModel):
+    collection: str
+    chunks: int
+    papers: int
+
+
+class KnowledgePapersResponse(BaseModel):
+    total: int
+    papers: list[KnowledgePaper]

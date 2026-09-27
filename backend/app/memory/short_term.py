@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 
+import redis
 import redis.asyncio as aioredis
 
 from app.core.config import get_settings
@@ -94,3 +95,39 @@ class ConversationMemory:
     @staticmethod
     def _key(session_id: str) -> str:
         return f"session:{session_id}:history"
+
+
+def format_history(history: list[dict]) -> str:
+    """Render turns as a prompt-ready string ("" when there is no history)."""
+    if not history:
+        return ""
+    lines = [f"{t['role'].capitalize()}: {t['content']}" for t in history]
+    return "Conversation history:\n" + "\n".join(lines)
+
+
+class SyncConversationMemory:
+    """
+    Same key schema as ConversationMemory, for sync callers (Celery worker).
+    Running the async client under asyncio.run() leaves connections bound
+    to a closed event loop, so the worker uses this instead.
+    """
+
+    def __init__(self, redis_url: str | None = None, ttl_seconds: int = 3600) -> None:
+        self._redis = redis.Redis.from_url(
+            redis_url or get_settings().redis_url,
+            decode_responses=True,
+            socket_connect_timeout=3,
+        )
+        self._ttl = ttl_seconds
+
+    def add_turn(self, session_id: str, role: str, content: str) -> None:
+        key = ConversationMemory._key(session_id)
+        self._redis.rpush(key, json.dumps({"role": role, "content": content, "ts": time.time()}))
+        self._redis.expire(key, self._ttl)
+
+    def format_for_prompt(self, session_id: str, last_n: int = 6) -> str:
+        raw = self._redis.lrange(ConversationMemory._key(session_id), -last_n, -1)
+        return format_history([json.loads(r) for r in raw])
+
+    def clear_session(self, session_id: str) -> None:
+        self._redis.delete(ConversationMemory._key(session_id))

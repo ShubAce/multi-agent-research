@@ -1,30 +1,34 @@
 """
 app/agents/rag_agent.py
 
-RAG Agent — upgraded with Hybrid Search + Query Rewriting.
+RAG Agent — Hybrid Search + Query Rewriting + cross-encoder reranking.
 
 Full pipeline per sub-task:
   1. Query Rewriting   → original + N variants
   2. Dense retrieval   → top-K candidates per variant
-  3. BM25 retrieval    → top-K candidates per variant
-  4. RRF Fusion        → merge all ranked lists into one
+  3. BM25 retrieval    → top-K candidates per variant (fused with dense via RRF)
+  4. RRF Fusion        → merge all per-variant lists into one
   5. Sentence-window   → restore surrounding context
   6. Cross-encoder     → rerank fused candidates, keep top-N
-  7. LLM answer        → generate answer from top-N chunks
+
+The reranked passages go straight to the Synthesiser, which writes one answer
+with numbered citations. (Earlier versions also ran a LlamaIndex query engine
+per sub-task — a second retrieval plus a 70B call whose output was mostly
+discarded.)
 """
 
 from __future__ import annotations
+
+import math
+import threading
 import time
 
-from llama_index.core import VectorStoreIndex
 from llama_index.core.postprocessor import (
     MetadataReplacementPostProcessor,
     SentenceTransformerRerank,
 )
-from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.response_synthesizers import ResponseMode
 from llama_index.core.retrievers import VectorIndexRetriever
-from llama_index.core.schema import NodeWithScore
+from llama_index.core.schema import NodeWithScore, QueryBundle
 
 from app.agents.state import AgentState
 from app.core.config import get_settings
@@ -40,244 +44,187 @@ from app.retrieval.query_rewriter import rewrite_query
 
 log = get_logger(__name__)
 
-
-def _get_all_nodes(index: VectorStoreIndex) -> list[NodeWithScore]:
-    """
-    Fetch all nodes from the index for BM25 indexing.
-    ChromaDB returns them via the docstore; we wrap in NodeWithScore.
-    """
-    try:
-        docstore = index.storage_context.docstore
-        all_nodes = list(docstore.docs.values())
-        return [NodeWithScore(node=node, score=1.0) for node in all_nodes]
-    except Exception as exc:
-        log.warning("could_not_fetch_all_nodes", error=str(exc))
-        return []
+_reranker: SentenceTransformerRerank | None = None
+_reranker_lock = threading.Lock()
 
 
-def _build_hybrid_query_engine(index: VectorStoreIndex) -> tuple[RetrieverQueryEngine, HybridRetriever | None]:
-    """
-    Build a query engine with hybrid retrieval.
+def _get_reranker() -> SentenceTransformerRerank:
+    """Load the cross-encoder once per process."""
+    global _reranker
+    with _reranker_lock:
+        if _reranker is None:
+            settings = get_settings()
+            _reranker = SentenceTransformerRerank(
+                model=settings.rerank_model,
+                top_n=settings.rerank_top_n,
+            )
+        return _reranker
 
-    Returns:
-        (query_engine, hybrid_retriever)
-        hybrid_retriever is None if hybrid search is disabled or failed to init.
-    """
+
+def _build_retrievers(pipeline) -> tuple[VectorIndexRetriever, HybridRetriever | None]:
     settings = get_settings()
-
-    dense_retriever = VectorIndexRetriever(
-        index=index,
+    dense = VectorIndexRetriever(
+        index=pipeline.get_index(),
         similarity_top_k=settings.retrieval_top_k,
     )
 
-    # Try to build the BM25 side
-    hybrid_retriever: HybridRetriever | None = None
+    hybrid: HybridRetriever | None = None
     if settings.hybrid_search_enabled:
         try:
-            all_nodes = _get_all_nodes(index)
+            all_nodes = pipeline.corpus_nodes()
             if all_nodes:
-                hybrid_retriever = HybridRetriever(
+                hybrid = HybridRetriever(
                     all_nodes=all_nodes,
                     dense_top_k=settings.retrieval_top_k,
                     bm25_top_k=settings.bm25_top_k,
                     rrf_k=settings.rrf_k,
                     final_top_n=settings.retrieval_top_k + settings.bm25_top_k,
                 )
-                log.info("hybrid_retriever_ready", num_nodes=len(all_nodes))
-            else:
-                log.warning("hybrid_search_disabled", reason="no nodes found in docstore")
         except Exception as exc:
             log.warning("hybrid_retriever_init_failed", error=str(exc), fallback="dense only")
 
-    # Postprocessors applied after retrieval
-    window_postprocessor = MetadataReplacementPostProcessor(
-        target_metadata_key="window"
-    )
-    reranker = SentenceTransformerRerank(
-        model="cross-encoder/ms-marco-MiniLM-L-2-v2",
-        top_n=settings.rerank_top_n,
-    )
-
-    query_engine = RetrieverQueryEngine.from_args(
-        retriever=dense_retriever,
-        node_postprocessors=[window_postprocessor, reranker],
-        response_mode=ResponseMode.COMPACT,
-        verbose=False,
-    )
-
-    return query_engine, hybrid_retriever
+    return dense, hybrid
 
 
 def _retrieve_with_query_variants(
     query: str,
-    query_engine: RetrieverQueryEngine,
-    hybrid_retriever: HybridRetriever | None,
+    dense: VectorIndexRetriever,
+    hybrid: HybridRetriever | None,
 ) -> list[NodeWithScore]:
     """
-    Run multi-query retrieval:
+    Multi-query retrieval:
       1. Rewrite query into N variants
       2. For each variant: dense retrieve → optionally fuse with BM25
       3. RRF-fuse all per-variant result sets into one final list
     """
     settings = get_settings()
-
-    # Step 1: rewrite query
     queries = rewrite_query(query)
-    log.info("multi_query_retrieval", num_variants=len(queries), queries=queries)
+    log.info("multi_query_retrieval", num_variants=len(queries))
 
-    all_result_lists: list[list[NodeWithScore]] = []
-
+    result_lists: list[list[NodeWithScore]] = []
     for q in queries:
-        # Step 2a: dense retrieval
-        dense_nodes = query_engine.retriever.retrieve(q)
+        dense_nodes = dense.retrieve(q)
+        result_lists.append(hybrid.fuse(dense_nodes, q) if hybrid else dense_nodes)
 
-        if hybrid_retriever is not None:
-            # Step 2b: fuse dense + BM25 for this variant
-            fused = hybrid_retriever.fuse(dense_nodes, q)
-            all_result_lists.append(fused)
-        else:
-            all_result_lists.append(dense_nodes)
+    if len(result_lists) == 1:
+        return result_lists[0]
 
-    # Step 3: fuse all per-variant lists into one final ranked list
-    if len(all_result_lists) == 1:
-        return all_result_lists[0]
-
-    final_nodes = reciprocal_rank_fusion(
-        all_result_lists,
+    return reciprocal_rank_fusion(
+        result_lists,
         k=settings.rrf_k,
         top_n=settings.retrieval_top_k * 2,  # give the reranker plenty to work with
     )
-    log.debug("multi_query_rrf_done", total_candidates=len(final_nodes))
-    return final_nodes
+
+
+def _rerank(task: str, nodes: list[NodeWithScore]) -> list[NodeWithScore]:
+    settings = get_settings()
+    bundle = QueryBundle(query_str=task)
+    windowed = MetadataReplacementPostProcessor(target_metadata_key="window").postprocess_nodes(
+        nodes, query_bundle=bundle
+    )
+    try:
+        reranked = _get_reranker().postprocess_nodes(windowed, query_bundle=bundle)
+        # The cross-encoder returns raw logits; squash them to a 0–1 relevance
+        # and drop passages it considers off-topic (the corpus may simply not
+        # cover the question — better no paper than an irrelevant one)
+        for nws in reranked:
+            nws.score = 1.0 / (1.0 + math.exp(-float(nws.score or 0.0)))
+        return [nws for nws in reranked if nws.score >= settings.rerank_min_score]
+    except Exception as exc:
+        log.warning("reranker_failed", error=str(exc), fallback="using fused order")
+        return windowed[: settings.rerank_top_n]
+
+
+def _passage(nws: NodeWithScore) -> dict:
+    meta = nws.node.metadata or {}
+    authors = meta.get("authors") or []
+    if isinstance(authors, str):
+        authors = [a.strip() for a in authors.split(",") if a.strip()]
+    score = float(nws.score or 0.0)
+    return {
+        "node_id": nws.node.node_id,
+        "text": nws.node.get_content(),
+        "title": meta.get("title", "Untitled paper"),
+        "authors": authors,
+        "url": meta.get("url", ""),
+        "arxiv_id": meta.get("arxiv_id", ""),
+        "published": meta.get("published", ""),
+        "relevance_score": round(min(max(score, 0.0), 1.0), 4),
+    }
 
 
 def rag_agent_node(state: AgentState) -> dict:
     """
-    LangGraph node: RAG Agent (upgraded with hybrid search + query rewriting).
+    LangGraph node: RAG Agent.
 
-    Input state keys used:  sub_tasks, routing
-    Output state keys set:  rag_results, citations, agents_used
+    Input state keys used:  routing
+    Output state keys set:  rag_results, source_contexts, agents_used
+      rag_results = [{"task": str, "passages": [passage, ...]}]  (tasks with no hits omitted)
     """
     t0 = time.perf_counter()
 
-    tasks_for_rag = [
-        task for task, agent in state.get("routing", {}).items()
-        if agent == "rag"
-    ]
-
+    tasks_for_rag = [task for task, agent in state.get("routing", {}).items() if agent == "rag"]
     if not tasks_for_rag:
         log.debug("rag_agent_skipped", reason="no tasks routed to rag")
         return {}
 
     log.info("rag_agent_start", tasks=tasks_for_rag)
+    agents_used = state.get("agents_used", []) + ["rag_agent"]
 
     try:
-        from app.ingestion.pipeline import IngestionPipeline
+        from app.ingestion.pipeline import get_pipeline
 
-        pipeline = IngestionPipeline()
-        index = pipeline.get_index()
-        query_engine, hybrid_retriever = _build_hybrid_query_engine(index)
+        pipeline = get_pipeline()
+        if pipeline.collection.count() == 0:
+            log.warning("rag_agent_empty_corpus")
+            return {"rag_results": [], "source_contexts": [], "agents_used": agents_used}
 
-        settings = get_settings()
+        dense, hybrid = _build_retrievers(pipeline)
+
         rag_results: list[dict] = []
-        all_citations: list[dict] = []
-        # Collect all source contexts for the faithfulness filter later
-        all_source_contexts: list[str] = []
+        source_contexts: list[str] = []
+        seen_nodes: set[str] = set()
 
         for task in tasks_for_rag:
             vdb_t0 = time.perf_counter()
-
-            # ── Hybrid multi-query retrieval ──────────────────────────────────
-            fused_nodes = _retrieve_with_query_variants(task, query_engine, hybrid_retriever)
-
-            # ── Apply reranker to fused results ──────────────────────────────
-            # Reranker expects NodeWithScore — wrap if needed
-            from llama_index.core.postprocessor import SentenceTransformerRerank
-            reranker = SentenceTransformerRerank(
-                model="cross-encoder/ms-marco-MiniLM-L-2-v2",
-                top_n=settings.rerank_top_n,
-            )
-            # MetadataReplacementPostProcessor restores the sentence window
-            from llama_index.core.postprocessor import MetadataReplacementPostProcessor
-            window_pp = MetadataReplacementPostProcessor(target_metadata_key="window")
-
-            from llama_index.core.schema import QueryBundle
-            query_bundle = QueryBundle(query_str=task)
-
-            try:
-                reranked = window_pp.postprocess_nodes(fused_nodes, query_bundle=query_bundle)
-                reranked = reranker.postprocess_nodes(reranked, query_bundle=query_bundle)
-            except Exception as exc:
-                log.warning("reranker_failed", error=str(exc), fallback="using fused nodes")
-                reranked = fused_nodes[:settings.rerank_top_n]
-
-            vdb_elapsed = time.perf_counter() - vdb_t0
-            vector_db_query_seconds.observe(vdb_elapsed)
+            fused = _retrieve_with_query_variants(task, dense, hybrid)
+            reranked = _rerank(task, fused) if fused else []
+            vector_db_query_seconds.observe(time.perf_counter() - vdb_t0)
             documents_retrieved_total.inc(len(reranked))
 
-            # ── Generate answer from reranked context ─────────────────────────
-            # Build context string from reranked nodes and query the LLM
-            context_str = "\n\n".join(
-                node.get_content() for node in reranked
-            ) if reranked else ""
+            passages = []
+            for nws in reranked:
+                if nws.node.node_id in seen_nodes:
+                    continue
+                seen_nodes.add(nws.node.node_id)
+                passage = _passage(nws)
+                passages.append(passage)
+                source_contexts.append(passage["text"])
 
-            source_contexts = [node.get_content() for node in reranked]
-            all_source_contexts.extend(source_contexts)
-
-            # Use query engine's synthesiser with our custom context
-            response = query_engine.query(task)
-
-            # ── Build citations ───────────────────────────────────────────────
-            task_citations = []
-            for node in reranked:
-                meta = node.metadata or {}
-                authors_val = meta.get("authors")
-                if isinstance(authors_val, str):
-                    authors_list = [a.strip() for a in authors_val.split(",") if a.strip()]
-                else:
-                    authors_list = authors_val or []
-                
-                task_citations.append({
-                    "title":           meta.get("title", "Unknown"),
-                    "authors":         authors_list,
-                    "url":             meta.get("url", ""),
-                    "arxiv_id":        meta.get("arxiv_id", ""),
-                    "published":       meta.get("published", ""),
-                    "relevance_score": round(node.score or 0.0, 4),
-                    "excerpt":         node.get_content()[:300],
-                })
-
-            rag_results.append({
-                "task":         task,
-                "answer":       str(response),
-                "citations":    task_citations,
-                "num_sources":  len(reranked),
-                "source_contexts": source_contexts,   # passed to faithfulness filter
-            })
-            all_citations.extend(task_citations)
+            if passages:
+                rag_results.append({"task": task, "passages": passages})
 
         elapsed = (time.perf_counter() - t0) * 1000
         log.info(
             "rag_agent_done",
             tasks=len(tasks_for_rag),
-            total_sources=len(all_citations),
+            passages=len(source_contexts),
             duration_ms=round(elapsed),
         )
         agent_runs_total.labels(agent_name="rag_agent", status="success").inc()
         agent_duration_seconds.labels(agent_name="rag_agent").observe(elapsed / 1000)
 
         return {
-            "rag_results":       rag_results,
-            "citations":         all_citations,
-            "source_contexts":   all_source_contexts,   # for faithfulness filter
-            "agents_used":       state.get("agents_used", []) + ["rag_agent"],
+            "rag_results": rag_results,
+            "source_contexts": source_contexts,
+            "agents_used": agents_used,
         }
 
     except Exception as exc:
         log.error("rag_agent_error", error=str(exc))
         agent_runs_total.labels(agent_name="rag_agent", status="error").inc()
         return {
-            "rag_results":  [],
-            "agents_used":  state.get("agents_used", []) + ["rag_agent"],
-            "error":        f"RAG agent failed: {exc}",
+            "rag_results": [],
+            "agents_used": agents_used,
+            "error": f"RAG agent failed: {exc}",
         }

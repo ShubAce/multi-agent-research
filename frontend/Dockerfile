@@ -19,6 +19,7 @@ ARG NEXT_PUBLIC_API_KEY=dev-secret-key-change-in-prod
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_KEY=$NEXT_PUBLIC_API_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV BUILD_STANDALONE=1
 
 RUN npm install -g pnpm && pnpm build
 
@@ -32,7 +33,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# next.config.js sets output: "standalone"
+# BUILD_STANDALONE=1 makes next.config.js emit output: "standalone"
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public

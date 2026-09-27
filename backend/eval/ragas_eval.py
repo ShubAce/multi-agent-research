@@ -1,7 +1,9 @@
 """
 eval/ragas_eval.py
 
-Runs RAGAS evaluation against the live RAG pipeline.
+Runs RAGAS evaluation against the live agent pipeline (planner → RAG →
+synthesiser → fact-check → critic) with web search disabled, so scores reflect
+the paper knowledge base and stay reproducible.
 
 Usage:
     poetry run python eval/ragas_eval.py              # full eval
@@ -36,8 +38,7 @@ from ragas.metrics import (
 
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
-from app.ingestion.pipeline import IngestionPipeline
-from app.agents.rag_agent import _build_hybrid_query_engine
+from app.agents.graph import build_graph
 
 setup_logging()
 log = get_logger(__name__)
@@ -60,21 +61,32 @@ def load_qa_pairs() -> list[dict]:
         return json.load(f)
 
 
-def run_rag_pipeline(question: str, query_engine) -> tuple[str, list[str]]:
-    """Run a single query and return (answer, list of context strings)."""
-    response = query_engine.query(question)
-    answer = str(response)
-    contexts = [node.get_content() for node in (response.source_nodes or [])]
+def _initial_state(question: str) -> dict:
+    return {
+        "query": question, "session_id": "", "use_web_search": False, "messages": [],
+        "conversation_history": "", "sub_tasks": [], "routing": {}, "web_results": [],
+        "rag_results": [], "source_contexts": [], "web_fallback": False, "final_answer": None,
+        "citations": [], "agents_used": [], "confidence_score": None, "fact_check": None,
+        "critic_score": None, "critic_feedback": None, "retry_count": 0, "error": None,
+        "iteration_count": 0,
+    }
+
+
+def run_rag_pipeline(question: str, graph) -> tuple[str, list[str]]:
+    """Run one question through the agent graph → (answer, retrieved passages)."""
+    state = graph.invoke(_initial_state(question))
+    answer = state.get("final_answer") or ""
+    contexts = [p["text"] for r in state.get("rag_results", []) for p in r.get("passages", [])]
     return answer, contexts
 
 
-def build_ragas_dataset(qa_pairs: list[dict], query_engine) -> Dataset:
+def build_ragas_dataset(qa_pairs: list[dict], graph) -> Dataset:
     """Build the HuggingFace Dataset that RAGAS expects."""
     questions, answers, contexts, ground_truths = [], [], [], []
 
     for pair in qa_pairs:
         log.info("evaluating_question", q=pair["question"][:60])
-        answer, ctx = run_rag_pipeline(pair["question"], query_engine)
+        answer, ctx = run_rag_pipeline(pair["question"], graph)
         questions.append(pair["question"])
         answers.append(answer)
         contexts.append(ctx if ctx else ["No context retrieved."])
@@ -96,17 +108,14 @@ def main(ci_mode: bool = False) -> int:
     log.info("ragas_eval_starting", ci_mode=ci_mode)
     settings = get_settings()
 
-    # Set up pipeline
-    pipeline = IngestionPipeline()
-    index = pipeline.get_index()
-    query_engine, _ = _build_hybrid_query_engine(index)
+    graph = build_graph()
 
     # Load eval set
     qa_pairs = load_qa_pairs()
     log.info("eval_set_loaded", count=len(qa_pairs))
 
     # Build RAGAS dataset
-    dataset = build_ragas_dataset(qa_pairs, query_engine)
+    dataset = build_ragas_dataset(qa_pairs, graph)
 
     # Run evaluation
     log.info("running_ragas_evaluation")

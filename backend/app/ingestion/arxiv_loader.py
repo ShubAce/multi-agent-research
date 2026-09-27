@@ -8,6 +8,7 @@ so citations in the final answer are traceable back to the real paper.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -28,6 +29,11 @@ class ArxivPaper:
     published: str          # ISO date string
     url: str
     categories: list[str] = field(default_factory=list)
+
+
+def base_arxiv_id(arxiv_id: str) -> str:
+    """Drop the version suffix: '2205.14135v2' → '2205.14135'."""
+    return re.sub(r"v\d+$", "", arxiv_id.strip())
 
 
 def fetch_arxiv_papers(
@@ -58,7 +64,7 @@ def fetch_arxiv_papers(
     for result in client.results(search):
         papers.append(
             ArxivPaper(
-                arxiv_id=result.entry_id.split("/")[-1],
+                arxiv_id=base_arxiv_id(result.entry_id.split("/")[-1]),
                 title=result.title,
                 authors=[a.name for a in result.authors],
                 abstract=result.summary,

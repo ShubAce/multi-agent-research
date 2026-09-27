@@ -10,9 +10,36 @@ import structlog
 from app.core.config import get_settings
 
 
+class _SafeStream:
+    """
+    Never let a log line crash the caller. Windows consoles and pipes default
+    to cp1252, and LLM output is full of characters it can't encode (e.g. the
+    non-breaking hyphen U+2011) — an unguarded print raised UnicodeEncodeError
+    inside agent nodes and replaced good answers with the fallback.
+    """
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text: str) -> int:
+        try:
+            return self._stream.write(text)
+        except UnicodeEncodeError:
+            encoding = getattr(self._stream, "encoding", None) or "ascii"
+            return self._stream.write(text.encode(encoding, "backslashreplace").decode(encoding))
+        except Exception:
+            return 0
+
+    def flush(self) -> None:
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+
+
 class NamedPrintLoggerFactory:
     def __init__(self, file=None):
-        self.file = file or sys.stdout
+        self.file = _SafeStream(file or sys.stdout)
 
     def __call__(self, *args, **kwargs) -> structlog.PrintLogger:
         name = args[0] if args else "root"
@@ -52,7 +79,7 @@ def setup_logging() -> None:
         processors=processors,
         context_class=dict,
         logger_factory=NamedPrintLoggerFactory(file=sys.stdout),
-        wrapper_class=structlog.BoundLogger,
+        wrapper_class=structlog.make_filtering_bound_logger(log_level),  # honour LOG_LEVEL
         cache_logger_on_first_use=True,
     )
 
